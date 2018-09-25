@@ -1,0 +1,289 @@
+<HTML>
+<!-- 
+************************************************************************************************
+* Утилита для быстрой смены сетевых параметров в передвижном пункте кассовых операций (ППКО)
+* Версия: 2.0
+* Дата: 25.09.2018
+* Автор: andpop
+************************************************************************************************
+-->
+<title>Сетевые параметры ППКО v.2.0</title>
+<head>
+<meta http-equiv="content-type" content="text/html; charset=Windows-1251">
+<HTA:Application
+    Border = Thick
+    BorderStyle = Complex
+    ShowInTaskBar = Yes
+    ApplicationName="PPKO_IP"
+    Scroll=No
+    SingleInstance=Yes
+    MaximizeButton = No
+    MinimizeButton = Yes
+    Version = "2.0"
+>
+<script language="VBScript">
+Const ForReading = 1
+Const PROVIDERS_FILE_NAME = "providers.ini"
+Const WIN_WIDTH = 550
+Const WIN_HEIGHT = 550
+
+Dim txtCurrent_IP, txtCurrent_Gateway, txtCurrent_Mask, txtCurrent_DNS1, txtCurrent_DNS2, txtIPMode, txtNetName, boolIsDHCP
+Dim objWMIService, objDocument
+Dim colAdapters, objAdapter
+Dim providersDictionary
+
+'----------------------------------------------------------------------
+Sub window_onLoad
+	Call Position_Window()
+
+	Set objDocument = self.Document
+	Set objWMIService = GetObject("winmgmts:\\.\root\cimv2")
+	
+	Call Get_IP_Config()
+	Call Show_IP_Config(txtNetName, txtIPMode, txtCurrent_IP, txtCurrent_Gateway, txtCurrent_Mask, txtCurrent_DNS1)
+    Set providersDictionary = Get_Providers_Dictionary
+	Call Show_Providers_List()
+End Sub
+
+'-----------------------------------------------------------------
+Sub Position_Window
+	Dim winPosX, winPosY
+	'On Error Resume Next
+	' Устанавливаем размеры окна и центрируем его
+	window.resizeTo WIN_WIDTH, WIN_HEIGHT
+	winPosX=screen.width/2-WIN_WIDTH/2
+	winPosY=screen.height/2-WIN_HEIGHT/2
+	window.moveTo winPosX, winPosY
+End Sub
+
+'-----------------------------------------------------------------
+'Читаем параметры IP-протокола в переменные
+Sub Get_IP_Config
+	Set colAdapters = objWMIService.ExecQuery("SELECT * FROM Win32_NetworkAdapterConfiguration WHERE IPEnabled = True")
+	For Each objAdapter In colAdapters
+		txtCurrent_IP = objAdapter.IPAddress(0)
+		txtCurrent_Gateway = objAdapter.DefaultIPGateway(0)
+		txtCurrent_Mask = objAdapter.IPSubnet(0)
+		txtCurrent_DNS1 = objAdapter.DNSServerSearchOrder(0)
+		If objAdapter.DHCPEnabled Then
+			txtIPMode = "Динамический"
+			txtNetName = "Сотовый оператор или Ростелеком"
+		Else
+			txtIPMode = "Статический"
+			txtNetName = "ТТК"
+		End If
+		boolIsDHCP = objAdapter.DHCPEnabled
+	Next
+End Sub
+
+'-----------------------------------------------------------------
+' Отображаем в документе переменные с параметрами IP-протокола 
+Sub Show_IP_Config(providerName, connectionType, IP, gateway, mask, DNS)
+  objDocument.all.txtNetName.InnerHTML = "Подключение: " & "<b>" & providerName & "</b>"
+  objDocument.all.txtIPMode.InnerHTML = "Тип IP-адреса: " & "<b>" & connectionType & "</b>"
+  objDocument.all.txtIP.InnerHTML = "IP-адрес: " & "<b>" & IP & "</b>"
+  objDocument.all.txtGateway.InnerHTML = "Шлюз: " & "<b>" & gateway & "</b>"
+  objDocument.all.txtMask.InnerHTML = "Маска: " & "<b>" & mask & "</b>"
+  objDocument.all.txtDNS.InnerHTML = "DNS: " & "<b>" & DNS & "</b>"
+End Sub
+
+'-----------------------------------------------------------------
+' Возвращает объект Dictionary с данными о сетевых парамтрах подключений всех провайдеров
+' Ключ = Название населенного пункта (или Ростелеком)
+' Значение = объект Dictionary с сетевыми параметрами
+Function Get_Providers_Dictionary
+	Dim providersDictionary, providerArray, providerSettings
+	Dim FSO, WshShell
+	Dim providersFilePath, providersFile
+
+    Set FSO = CreateObject("Scripting.FileSystemObject")
+	Set WshShell = CreateObject("WScript.Shell")
+	providersFilePath = WshShell.CurrentDirectory & "\" & PROVIDERS_FILE_NAME
+
+	If Not FSO.FileExists(providersFilePath) Then
+		MsgBox "Конфигурационный файл " & providersFilePath & " не найден!"
+		Exit Function
+	End If
+
+	Set providersDictionary = CreateObject("Scripting.Dictionary")
+
+    Set providersFile = FSO.OpenTextFile(providersFilePath, ForReading)
+	Do While Not providersFile.AtEndOfStream
+		currentLine = providersFile.ReadLine
+		If (Left(currentLine, 1) <> "#") Then
+			providerArray = Split(currentLine, ",")
+			Set providerSettings = CreateObject("Scripting.Dictionary")
+			providerSettings.Add "Type", Trim(providerArray(1))
+			If (providerSettings("Type") = "static") Then
+				providerSettings.Add "Provider", Trim(providerArray(2))
+				providerSettings.Add "IP", Trim(providerArray(3))
+				providerSettings.Add "Gateway", Trim(providerArray(4))
+				providerSettings.Add "Mask", Trim(providerArray(5))
+				providerSettings.Add "DNS", Trim(providerArray(6))
+				providerSettings.Add "DNS2", Trim(providerArray(7))
+			End If
+			providersDictionary.Add Trim(providerArray(0)), providerSettings
+		End If
+	Loop
+	Set Get_Providers_Dictionary = providersDictionary
+End Function
+
+'-----------------------------------------------------------------
+Sub Show_Providers_List
+	Dim i, strHTML
+
+	strHTML = ""
+	For i=0 to providersDictionary.Count - 1 
+		strHTML = strHTML & "<input type=""radio"" " & _
+			"name=""provider"" " & "id=""r" & i & """ value =""" & i & """>" & _
+			"<label for=""r" & i & """>" & _
+			providersDictionary.Keys()(i) & "</label><br>"
+	Next
+	objDocument.all.providers.InnerHTML = strHTML
+End Sub
+
+'-----------------------------------------------------------------
+Sub Show_Console
+	Dim objShell
+
+	Set objShell = CreateObject("WScript.Shell")
+	objShell.Run("cmd /c ipconfig /all && pause")
+End Sub
+'-----------------------------------------------------------------
+
+Sub Set_Static_IP(providerName, IP, gateway, mask, DNS, DNS2)
+	Dim strOut, errEnable_Static, errDNSServers, errGateways
+	Dim arrIPAddress, arrSubnetMask, arrGateway, arrGatewayMetric, arrDNSServers, colAdapters
+	
+	Set colAdapters = objWMIService.ExecQuery("Select * from Win32_NetworkAdapterConfiguration where IPEnabled=TRUE")
+	arrIPAddress = Array(IP)
+	
+	arrSubnetMask = Array(mask)
+	arrDNSServers = Array(DNS, DNS2)
+	arrGateway = Array(gateway)
+	arrGatewayMetric = Array(1)
+	For Each objAdapter In colAdapters
+		errEnable_Static = objAdapter.EnableStatic(arrIPAddress, arrSubnetMask)
+		errGateways = objAdapter.SetGateways(arrGateway, arrGatewaymetric)
+		errDNSServers = objAdapter.SetDNSServerSearchOrder(arrDNSServers)
+		
+		If errEnable_Static = 0 Then
+			MsgBox "Установлены сетевые параметры для подключения: " & providerName, vbInformation
+		Else
+			MsgBox "Ошибка " & errEnable_Static & " при записи сетевых параметров!", vbCritical
+		End If
+	Next
+	
+	Call Get_IP_Config()
+	Call Show_IP_Config(providerName, txtIPMode, txtCurrent_IP, txtCurrent_Gateway, txtCurrent_Mask, txtCurrent_DNS1)
+End Sub
+'-----------------------------------------------------------------
+
+' Включение DHCP на сетевом адаптере
+Sub Set_DHCP(providerName)
+	Dim strOut, errEnable_DHCP, errDNSServers, errGateways
+	Dim arrGateway, arrGatewayMetric, arrDNSServers, colAdapters
+
+	' Шлюз, который выдает DHCP на модемах
+	Const DHCP_Gateway = "192.168.0.1"
+
+	arrDNSServers = Array()
+	' Если явно не выставить шлюз для DHCP, то в настройках IP получается два шлюза: от статики с метрикой 1 и от DHCP с метрикой 0.
+	' При этом все работает, но все-таки страшно. Убрать из скрипта лишний шлюз я не смог.
+	arrGateway = Array(DHCP_Gateway)
+	arrGatewayMetric = Array(1)
+	
+	Set colAdapters = objWMIService.ExecQuery("Select * from Win32_NetworkAdapterConfiguration where IPEnabled=TRUE")
+	For Each objAdapter In colAdapters
+		
+		errGateways = objAdapter.SetGateways(arrGateway, arrGatewaymetric)
+		errDNSServers = objAdapter.SetDNSServerSearchOrder(arrDNSServers)
+		errEnable_DHCP = objAdapter.EnableDHCP()
+		
+		If errEnable_DHCP = 0 Then
+			MsgBox "Установлены сетевые параметры для оператора: " & providerName, vbInformation
+		Else
+			MsgBox "Ошибка " & errEnable_DHCP & " при записи сетевых параметров!", vbCritical
+		End If
+	Next  
+	
+	Call Get_IP_Config()
+	Call Show_IP_Config(providerName, txtIPMode, txtCurrent_IP, txtCurrent_Gateway, txtCurrent_Mask, txtCurrent_DNS1)
+End Sub
+'-----------------------------------------------------------------
+Sub About
+  MsgBox "Сетевые параметры ППКО 2.0", vbInformation
+End Sub
+
+'-----------------------------------------------------------------
+' Функция для возврата значения выбранной радиокнопки. Кнопки выделяются по имени группы (тег name)
+Function Get_Radio_Value (radioboxGroupName)
+	Dim i, group
+
+	Set group = objDocument.getElementsByName(radioboxGroupName)
+	For i = 0 To group.length -1 
+		If group(i).Checked Then
+			Get_Radio_Value = i
+		End If
+	Next
+End Function
+
+'-----------------------------------------------------------------
+' Устанавливаем сетевые параметры для выбранного оператора
+Sub Set_IP_Settings
+	Dim providerNumber, providerName, providerSettings, connectionType
+
+	providerNumber = Get_Radio_Value("provider")
+	providerName = providersDictionary.Keys()(providerNumber)
+	Set providerSettings = providersDictionary.Items()(providerNumber)
+	connectionType = providerSettings("Type")
+	If connectionType <> "static" Then
+		Call Set_DHCP(providerName)
+	Else
+		Call Set_Static_IP(_
+				providerName, _
+				providerSettings("IP"), _
+				providerSettings("Gateway"), _
+				providerSettings("Mask"), _
+				providerSettings("DNS"), _
+				providerSettings("DNS2") _
+				)
+	End If
+End Sub
+
+</script>
+
+</head>
+
+<!--   *****************************************************************  -->
+<!--                         Main HTML Form                               -->
+<!--   *****************************************************************  -->
+
+<body bgcolor="silver" l="no">
+	<p align = "left">
+		<form name="MainForm">
+			<div id="txtNetName">
+				Подключение: 
+			</div>
+			<br>
+			<fieldset>
+				<legend> Текущие сетевые параметры </legend>
+				<div id="txtIPMode">Тип IP-адреса: </div>
+				<div id="txtIP">IP-адрес: </div>
+				<div id="txtGateway">Шлюз: </div>
+				<div id="txtMask">Маска: </div>
+				<div id="txtDNS">DNS: </div>
+			</fieldset>
+			<br>
+			<fieldset>
+				<legend> Как подключаемся? </legend>
+				<div id="providers">
+				</div>
+				<br>
+				<button onClick="Set_IP_Settings">Установить параметры</button>
+			</fieldset>
+			<p><button onClick="Show_Console">Запустить ipconfig</button></p>	
+		</form>
+	</p>
+</body>
+</html>
